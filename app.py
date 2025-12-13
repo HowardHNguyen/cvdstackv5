@@ -42,21 +42,21 @@ MODELS_DIR = BASE / "models"
 @st.cache_resource
 def load_artifacts():
     # Required
-    scaler = joblib.load(MODELS_DIR / "scaler_24.pkl")
+    scaler = joblib.load("scaler_24.pkl")
 
     # Choose ONE deployment mode:
     # (A) single best model
-    # model = joblib.load(MODELS_DIR / "gbm_24.pkl")
+    # model = joblib.load("gbm_24.pkl")
     # model_type = "single"
 
     # (B) stacking (recommended if you trained it)
-    rf = joblib.load(MODELS_DIR / "rf_24.pkl")
-    xgb = joblib.load(MODELS_DIR / "xgb_24.pkl")
-    meta = joblib.load(MODELS_DIR / "stack_meta_24.pkl")
+    rf = joblib.load("rf_24.pkl")
+    xgb = joblib.load("xgb_24.pkl")
+    meta = joblib.load("stack_meta_24.pkl")
     model_type = "stacking"
 
     # Feature list (preferred)
-    feat_path = MODELS_DIR / "feature_list_24.json"
+    feat_path = "feature_list_24.json"
     if feat_path.exists():
         feature_list = json.loads(feat_path.read_text())["features"]
     else:
