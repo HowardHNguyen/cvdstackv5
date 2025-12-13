@@ -62,6 +62,23 @@ def _footer():
 @st.cache_resource
 def load_artifacts():
     base = Path(__file__).resolve().parent
+
+    def _describe_file(p: Path) -> str:
+        try:
+            return f"{p.name} ({p.stat().st_size:,} bytes)"
+        except Exception:
+            return p.name
+
+    def _is_lfs_pointer(p: Path) -> bool:
+        # Git LFS pointer files are small text files that start with this line
+        try:
+            with open(p, "rb") as f:
+                head = f.read(200)
+            return b"git-lfs.github.com/spec" in head
+        except Exception:
+            return False
+
+    # 1) Existence check
     missing = [fn for fn in ARTIFACTS.values() if not (base / fn).exists()]
     if missing:
         raise FileNotFoundError(
@@ -70,14 +87,56 @@ def load_artifacts():
             + "\n\nExpected all artifacts to be in the SAME folder as app.py."
         )
 
-    with open(base / ARTIFACTS["feature_list"], "r") as f:
+    # 2) Size + LFS pointer checks (prevents confusing EOFError)
+    problems = []
+    for k, fn in ARTIFACTS.items():
+        p = base / fn
+        size = p.stat().st_size
+
+        if size < 1024:  # <1KB is almost never a real model/scaler
+            problems.append(f"- {fn} is too small ({size} bytes). Likely incomplete upload.")
+        if _is_lfs_pointer(p):
+            problems.append(f"- {fn} looks like a Git LFS pointer (not the real binary).")
+
+    if problems:
+        raise RuntimeError(
+            "Artifact integrity check failed:\n"
+            + "\n".join(problems)
+            + "\n\nFix:\n"
+            "1) Ensure the real .pkl/.json files (not LFS pointers) are committed/deployed.\n"
+            "2) Re-upload/regenerate artifacts and redeploy.\n"
+        )
+
+    # 3) Load feature list first (human-readable error if wrong)
+    fl_path = base / ARTIFACTS["feature_list"]
+    with open(fl_path, "r") as f:
         features = json.load(f)["features"]
 
-    scaler = joblib.load(base / ARTIFACTS["scaler"])
-    rf = joblib.load(base / ARTIFACTS["rf"])
-    xgb = joblib.load(base / ARTIFACTS["xgb"])
-    meta = joblib.load(base / ARTIFACTS["meta"])
+    # 4) Load binaries with clear per-file error reporting
+    def _safe_joblib_load(name: str, filename: str):
+        p = base / filename
+        try:
+            return joblib.load(p)
+        except EOFError as e:
+            raise RuntimeError(
+                f"Failed to load {name}: {_describe_file(p)} -> EOFError.\n\n"
+                f"This usually means the file is truncated/corrupted or an LFS pointer was deployed.\n"
+                f"Recreate and re-upload '{filename}' and redeploy."
+            ) from e
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to load {name}: {_describe_file(p)}.\n\n"
+                f"Error: {type(e).__name__}: {e}\n"
+                f"Tip: ensure sklearn/xgboost versions match the training environment."
+            ) from e
+
+    scaler = _safe_joblib_load("scaler", ARTIFACTS["scaler"])
+    rf     = _safe_joblib_load("RandomForest model", ARTIFACTS["rf"])
+    xgb    = _safe_joblib_load("XGBoost model", ARTIFACTS["xgb"])
+    meta   = _safe_joblib_load("meta-learner", ARTIFACTS["meta"])
+
     return features, scaler, rf, xgb, meta
+
 
 FEATURE_META = {
     "SEX":       {"label": "Sex", "type": "cat01", "help": "0 = Female, 1 = Male"},
