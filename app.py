@@ -5,6 +5,15 @@ import joblib
 import streamlit as st
 from pathlib import Path
 
+# Optional SHAP imports (app still runs if not installed)
+try:
+    import shap
+    import matplotlib.pyplot as plt
+    SHAP_AVAILABLE = True
+except Exception:
+    SHAP_AVAILABLE = False
+
+
 # =========================
 # 1) PAGE CONFIG
 # =========================
@@ -54,6 +63,7 @@ def load_artifacts():
     return scaler, rf_model, xgb_model, meta_model, features_24
 
 scaler, rf_model, xgb_model, meta_model, FEATURES_24 = load_artifacts()
+
 
 # =========================
 # 3) HELPERS
@@ -166,9 +176,10 @@ def build_input_df_24():
 
     return pd.DataFrame([row_ordered])
 
+
 def stacking_predict_proba_24(df_input: pd.DataFrame, threshold: float):
     """
-    Correct stacking (same pattern as v4):
+    Correct stacking:
     - scale 24 features
     - p_rf, p_xgb from base models
     - meta LR uses ONLY [p_rf, p_xgb] (2 columns)
@@ -191,21 +202,26 @@ def stacking_predict_proba_24(df_input: pd.DataFrame, threshold: float):
     }
     return final_prob, final_label, component_probs
 
-def bie_scenarios_24(df_patient: pd.DataFrame, threshold: float):
+
+def bie_scenarios_24(df_patient: pd.DataFrame, threshold: float, include_advanced: bool):
     """
-    BIE for v5 clinical+history model:
-    - baseline
-    - no smoking
-    - lower SBP by 10
-    - BMI -2
-    - TOTCHOL -20
-    - GLUCOSE -10
+    BIE for v5 clinical+history model (Option A: research-accurate, honest).
+    Clinician-safe scenarios (default):
+      - No smoking
+      - Lower SBP by 10
+      - Lower Glucose by 10
+    Research/advanced scenarios (optional toggle):
+      - BMI -2
+      - TOTCHOL -20
+
+    Note: BIE is NOT causal inference. It is a model-based sensitivity / what-if analysis.
     """
     base_prob, _, _ = stacking_predict_proba_24(df_patient, threshold=threshold)
 
     scenarios = []
     scenarios.append(("Baseline", "Current profile", df_patient.copy()))
 
+    # Safe levers
     if float(df_patient["CIGPDAY"].iloc[0]) > 0:
         d = df_patient.copy()
         d["CIGPDAY"] = 0.0
@@ -216,20 +232,22 @@ def bie_scenarios_24(df_patient: pd.DataFrame, threshold: float):
     d["SYSBP"] = max(sysbp - 10.0, 90.0)
     scenarios.append(("Lower SBP by 10 mmHg", f"SYSBP: {sysbp:.0f} → {d['SYSBP'].iloc[0]:.0f}", d))
 
-    bmi = float(df_patient["BMI"].iloc[0])
-    d = df_patient.copy()
-    d["BMI"] = max(bmi - 2.0, 15.0)
-    scenarios.append(("Reduce BMI by 2 kg/m²", f"BMI: {bmi:.1f} → {d['BMI'].iloc[0]:.1f}", d))
-
-    tc = float(df_patient["TOTCHOL"].iloc[0])
-    d = df_patient.copy()
-    d["TOTCHOL"] = max(tc - 20.0, 100.0)
-    scenarios.append(("Lower Total Chol by 20 mg/dL", f"TOTCHOL: {tc:.0f} → {d['TOTCHOL'].iloc[0]:.0f}", d))
-
     gl = float(df_patient["GLUCOSE"].iloc[0])
     d = df_patient.copy()
     d["GLUCOSE"] = max(gl - 10.0, 60.0)
     scenarios.append(("Lower Glucose by 10 mg/dL", f"GLUCOSE: {gl:.0f} → {d['GLUCOSE'].iloc[0]:.0f}", d))
+
+    # Advanced levers (may be non-monotonic due to cohort correlations / reverse causality)
+    if include_advanced:
+        bmi = float(df_patient["BMI"].iloc[0])
+        d = df_patient.copy()
+        d["BMI"] = max(bmi - 2.0, 15.0)
+        scenarios.append(("Reduce BMI by 2 kg/m²", f"BMI: {bmi:.1f} → {d['BMI'].iloc[0]:.1f}", d))
+
+        tc = float(df_patient["TOTCHOL"].iloc[0])
+        d = df_patient.copy()
+        d["TOTCHOL"] = max(tc - 20.0, 100.0)
+        scenarios.append(("Lower Total Chol by 20 mg/dL", f"TOTCHOL: {tc:.0f} → {d['TOTCHOL'].iloc[0]:.0f}", d))
 
     rows = []
     best = None
@@ -253,6 +271,48 @@ def bie_scenarios_24(df_patient: pd.DataFrame, threshold: float):
                 best = {"name": name, "p": p, "drop": drop}
 
     return base_prob, pd.DataFrame(rows), best
+
+
+# -------- SHAP helpers (RF + XGB) --------
+@st.cache_resource
+def _build_shap_explainers(_rf_model, _xgb_model):
+    if not SHAP_AVAILABLE:
+        return None, None
+    # TreeExplainer is appropriate for RF/XGB and fast enough for single-patient local explanations
+    rf_explainer = shap.TreeExplainer(_rf_model)
+    xgb_explainer = shap.TreeExplainer(_xgb_model)
+    return rf_explainer, xgb_explainer
+
+def _shap_local_bar(explainer, X_row_1xF, feature_names, title: str, max_display=12):
+    """
+    Render a simple local SHAP bar plot (Streamlit-friendly).
+    X_row_1xF must be shape (1, F).
+    """
+    if not SHAP_AVAILABLE or explainer is None:
+        st.info("SHAP is not available in this deployment. Add `shap` and `matplotlib` to requirements.txt.")
+        return
+
+    sv = explainer.shap_values(X_row_1xF)
+
+    # Normalize to class 1 (binary)
+    if isinstance(sv, list) and len(sv) == 2:
+        sv = sv[1]
+    vals = sv[0]  # shape (F,)
+
+    idx = np.argsort(np.abs(vals))[::-1][:max_display]
+    names = [feature_names[i] for i in idx]
+    impacts = vals[idx]
+
+    fig, ax = plt.subplots(figsize=(7, 4))
+    ax.barh(range(len(idx))[::-1], impacts)
+    ax.set_yticks(range(len(idx))[::-1])
+    ax.set_yticklabels(names)
+    ax.set_title(title)
+    ax.set_xlabel("SHAP impact on model output (class=1)")
+    ax.axvline(0, linewidth=1)
+    plt.tight_layout()
+    st.pyplot(fig)
+
 
 # =========================
 # 4) SIDEBAR
@@ -284,6 +344,13 @@ with st.sidebar:
         key="sidebar_show_components"
     )
 
+    show_shap = st.checkbox(
+        "Show SHAP local explanation (RF/XGB)",
+        value=False,
+        help="Requires `shap` + `matplotlib` in requirements.txt. Adds interpretability plots for the current patient.",
+        key="sidebar_show_shap"
+    )
+
     st.markdown("---")
     st.markdown(
         """
@@ -292,6 +359,7 @@ with st.sidebar:
         a standalone diagnostic system.
         """
     )
+
 
 # =========================
 # 5) HERO HEADER
@@ -309,7 +377,7 @@ st.markdown(
 )
 
 # =========================
-# 6) TABS (match v4/v3)
+# 6) TABS
 # =========================
 tab_calc, tab_bie, tab_model, tab_faq = st.tabs(
     ["🧮 Risk Calculator", "🧠 Behavioral Impact Engine (BIE)", "🧬 Model & Data", "❓ FAQ & Notes"]
@@ -372,9 +440,34 @@ with tab_calc:
             )
             st.bar_chart(comp_df.set_index("Model"))
 
+        # SHAP local explanations (optional)
+        if show_shap:
+            with st.expander("Local explanation (SHAP) — why the base models scored this way", expanded=False):
+                st.caption(
+                    "SHAP highlights which features most pushed the RF and XGB predictions up or down for this patient. "
+                    "This is an association-based explanation from the trained model (not a treatment-effect estimate)."
+                )
+
+                if not SHAP_AVAILABLE:
+                    st.info("SHAP is not available here. Add `shap` and `matplotlib` to requirements.txt, then redeploy.")
+                else:
+                    # Build explainers once
+                    rf_explainer, xgb_explainer = _build_shap_explainers(rf_model, xgb_model)
+
+                    # Base models operate on scaled features
+                    X_raw = df_input.values.astype(float)
+                    X_scaled = scaler.transform(X_raw)
+
+                    st.markdown("**Random Forest (RF) — Local SHAP (Top drivers)**")
+                    _shap_local_bar(rf_explainer, X_scaled, FEATURES_24, "RF: Top local drivers", max_display=12)
+
+                    st.markdown("**XGBoost (XGB) — Local SHAP (Top drivers)**")
+                    _shap_local_bar(xgb_explainer, X_scaled, FEATURES_24, "XGB: Top local drivers", max_display=12)
+
         st.info("Next: open **Behavioral Impact Engine (BIE)** to see patient-specific what-if scenarios.")
     else:
         st.info("Fill in the patient information and click **Run CVD Risk Prediction**.")
+
 
 # -------------------------
 # TAB 2 – BIE
@@ -382,14 +475,46 @@ with tab_calc:
 with tab_bie:
     st.subheader("Behavioral Impact Engine (BIE)")
 
+    # Clinician-facing interpretation text (Option A: honest, research-accurate)
     st.markdown(
         """
-        The **Behavioral Impact Engine (BIE)** evaluates which modifiable factor matters most for a specific patient
-        and provides **model-based counterfactual scenarios** (what-if changes → re-score → compare).
+        **How to interpret BIE (Important)**  
+        The Behavioral Impact Engine (BIE) runs **model-based “what-if” simulations**: it changes **one input at a time**
+        while holding all other patient variables constant, then re-scores the patient with the same trained model.  
+        BIE **does not estimate treatment effects** and should not be interpreted as causal evidence. Some factors (e.g., BMI,
+        cholesterol) may show non-monotonic or counter-intuitive changes due to **age-specific interactions, comorbidity patterns,
+        and correlations in the training population** (e.g., frailty/smoking-related weight loss or reverse causality).  
+        Use BIE as a **sensitivity and hypothesis-generation tool**, interpreted alongside clinical judgment and guideline-based care.
         """
     )
 
+    with st.expander("Why can risk increase when BMI or total cholesterol decreases? (FAQ)", expanded=False):
+        st.markdown(
+            """
+            In observational datasets, BMI and cholesterol are correlated with other health states. In older cohorts,
+            lower BMI or lower total cholesterol can co-occur with frailty, chronic disease, inflammation, or smoking-related
+            weight loss. The model learns these **population-level patterns** and their interactions with age, BP, smoking, and glucose.  
+            Therefore, a one-variable change in BIE reflects movement along the model’s learned risk surface—not the effect of
+            a clinical intervention (e.g., statin therapy, structured weight-loss program).
+            """
+        )
+
     st.markdown("---")
+
+    # Production lever control: safe by default; advanced optional
+    col_bie1, col_bie2 = st.columns([1, 2])
+    with col_bie1:
+        include_advanced = st.checkbox(
+            "Include Research/Advanced scenarios (BMI, Total Chol)",
+            value=False,
+            help="Advanced scenarios may behave non-monotonically in observational data; interpret as model sensitivity, not causality.",
+            key="bie_include_advanced"
+        )
+    with col_bie2:
+        st.caption(
+            "Default BIE focuses on clinician-safe, modifiable levers (smoking, SBP, glucose). "
+            "Enable advanced scenarios to explore non-monotonic factors (BMI, cholesterol) for research discussion."
+        )
 
     if "v5_last_input_df" not in st.session_state:
         st.warning("Please run a prediction in **Risk Calculator** first.")
@@ -400,7 +525,11 @@ with tab_bie:
         run_bie = st.button("Run BIE Analysis", key="btn_run_bie")
 
         if run_bie:
-            base_prob, scenario_df, best = bie_scenarios_24(df_patient, threshold=used_threshold)
+            base_prob, scenario_df, best = bie_scenarios_24(
+                df_patient,
+                threshold=used_threshold,
+                include_advanced=include_advanced
+            )
             category, color = interpret_risk(base_prob)
 
             st.markdown("### Patient-Specific BIE Summary")
@@ -434,8 +563,8 @@ with tab_bie:
                 **Blood Pressure**
                 - If SBP/DBP are elevated, discuss lifestyle and clinician-guided management.
 
-                **Lipids & Metabolic**
-                - Encourage guideline-aligned diet/exercise; evaluate lipid/glucose management clinically.
+                **Metabolic**
+                - Encourage guideline-aligned diet/exercise; evaluate glucose management clinically.
                 """
             )
 
@@ -447,6 +576,7 @@ with tab_bie:
             )
         else:
             st.info("Click **Run BIE Analysis** to generate the scenario table and recommendations.")
+
 
 # -------------------------
 # TAB 3 – MODEL & DATA
@@ -470,13 +600,19 @@ with tab_model:
         - Symptoms/History: ANGINA, MI_FCHD, STROKE, HYPERTEN
         - Expanded history: PREVCHD, PREVAP, PREVMI, PREVSTRK, PREVHYP, HOSPMI
 
-        ### Architecture
+        ### Architecture (Current v5.0)
         - Base learners: **RandomForest** + **XGBoost**
-        - Stacking meta-model: **LogisticRegression** trained on **two inputs**:
+        - For each base model, we compute:
+          \\( p_{RF}(CVD=1 \\mid x) \\), \\( p_{XGB}(CVD=1 \\mid x) \\)
+        - We then stack these into a meta-feature:
           \\( z = [p_{RF}, p_{XGB}] \\)
-        - Output: probability of 10-year CVD risk (research/education).
+        - A Logistic Regression meta-learner is trained on \\( z \\) to produce the final probability:
+          \\( p_{stack}(CVD=1 \\mid x) \\)
+
+        **Note:** A CNN+GRU base learner can be added in a future v5.x release to align with the v3.0 architecture.
         """
     )
+
 
 # -------------------------
 # TAB 4 – FAQ & NOTES
@@ -495,8 +631,16 @@ with tab_faq:
 
         **Q3. What changed from v4 to v5?**  
         v5 expands the clinical+history feature set to 24 inputs (adds PREV* history fields and HOSPMI).
+
+        **Q4. What does SHAP mean here?**  
+        SHAP explains which features contributed most to the **RF/XGB base model predictions** for a single patient.
+        It is an association-based explanation of the trained model, not a causal estimate of treatment benefit.
         """
     )
+
+    if not SHAP_AVAILABLE:
+        st.info("Tip: To enable SHAP in Streamlit Cloud, add `shap` and `matplotlib` to requirements.txt and redeploy.")
+
 
 # =========================
 # 7) FOOTER
