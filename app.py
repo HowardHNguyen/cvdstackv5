@@ -1,443 +1,514 @@
-
-import json
-from pathlib import Path
-
 import numpy as np
 import pandas as pd
-import streamlit as st
+import json
 import joblib
+import streamlit as st
+from pathlib import Path
 
-# =========================================================
-# v5.0 — 24-Feature Stacking (RF + XGB + Meta LR)
-# Root-level artifacts (same folder as app.py)
-# =========================================================
-
-APP_VERSION = "v5.0"
-ARTIFACTS = {
-    "feature_list": "feature_list_24.json",
-    "scaler": "scaler_24.pkl",
-    "rf": "rf_24.pkl",
-    "xgb": "xgb_24.pkl",
-    "meta": "stack_meta_24.pkl",
-}
-
-HISTORY_FLAGS = [
-    "PREVCHD", "PREVAP", "PREVMI", "PREVSTRK", "PREVHYP", "HOSPMI",
-    "ANGINA", "MI_FCHD", "STROKE", "HYPERTEN",
-]
-
+# =========================
+# 1) PAGE CONFIG
+# =========================
 st.set_page_config(
-    page_title=f"CVD Risk Prediction {APP_VERSION}",
+    page_title="CVD Risk – Stacking GenAI v5.0 (24 Features Clinical+History)",
     page_icon="🫀",
-    layout="wide",
+    layout="wide"
 )
 
-def _header():
-    st.markdown(
-        f"""
-        <div style="padding:18px 18px;border-radius:14px;background:linear-gradient(90deg,#0f4c75,#1b6ca8);">
-          <div style="font-size:30px;font-weight:850;color:white;line-height:1.15;">
-            🫀 CVD Risk Prediction — Enhanced Clinical History Model ({APP_VERSION})
-          </div>
-          <div style="font-size:14px;color:#e8f6ff;margin-top:6px;">
-            10‑Year Cardiovascular Disease (CVD) Risk Estimation • 24 inputs • Stacking (RF + XGB → Meta‑Learner)
-          </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    st.write("")
+# =========================
+# 2) LOAD ARTIFACTS (24-feature clinical+history)
+# =========================
+DEFAULT_THRESHOLD = 0.40
 
-def _footer():
-    st.markdown(
-        """
-        <hr style="margin-top:24px;margin-bottom:10px;">
-        <div style="color:gray;font-size:12px;">
-          © CVDStack • Prototype CDS • Not medical advice • Use requires local validation & governance approval.
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+ARTIFACTS = {
+    "scaler": Path("scaler_24.pkl"),
+    "rf": Path("rf_clin24.pkl"),
+    "xgb": Path("xgb_clin24.pkl"),
+    "meta": Path("stack_meta_clin24.pkl"),
+    "features": Path("features_24.json"),
+}
 
 @st.cache_resource
 def load_artifacts():
-    base = Path(__file__).resolve().parent
-
-    def _describe_file(p: Path) -> str:
-        try:
-            return f"{p.name} ({p.stat().st_size:,} bytes)"
-        except Exception:
-            return p.name
-
-    def _is_lfs_pointer(p: Path) -> bool:
-        # Git LFS pointer files are small text files that start with this line
-        try:
-            with open(p, "rb") as f:
-                head = f.read(200)
-            return b"git-lfs.github.com/spec" in head
-        except Exception:
-            return False
-
-    # 1) Existence check
-    missing = [fn for fn in ARTIFACTS.values() if not (base / fn).exists()]
+    missing = [k for k, p in ARTIFACTS.items() if not p.exists()]
     if missing:
-        raise FileNotFoundError(
-            "Missing required deployment files in repo root:\n"
-            + "\n".join([f" - {m}" for m in missing])
-            + "\n\nExpected all artifacts to be in the SAME folder as app.py."
+        st.error(
+            "Missing required model files:\n\n"
+            + "\n".join([f"- {k}: {ARTIFACTS[k]}" for k in missing])
+            + "\n\nUpload these into the same repo folder as app.py."
+        )
+        st.stop()
+
+    scaler = joblib.load(ARTIFACTS["scaler"])
+    rf_model = joblib.load(ARTIFACTS["rf"])
+    xgb_model = joblib.load(ARTIFACTS["xgb"])
+    meta_model = joblib.load(ARTIFACTS["meta"])
+
+    with open(ARTIFACTS["features"], "r") as f:
+        features_24 = json.load(f)
+
+    # Safety checks
+    if not isinstance(features_24, list) or len(features_24) != 24:
+        st.error("features_24.json must be a JSON list of exactly 24 feature names.")
+        st.stop()
+
+    return scaler, rf_model, xgb_model, meta_model, features_24
+
+scaler, rf_model, xgb_model, meta_model, FEATURES_24 = load_artifacts()
+
+# =========================
+# 3) HELPERS
+# =========================
+def interpret_risk(prob: float):
+    if prob < 0.05:
+        return "Low risk", "🟢"
+    if prob < 0.10:
+        return "Borderline risk", "🟡"
+    if prob < 0.20:
+        return "Intermediate risk", "🟠"
+    return "High risk", "🔴"
+
+def _as_int_yesno(v: str) -> int:
+    return 1 if v == "Yes" else 0
+
+def build_input_df_24():
+    """
+    Render UI for 24 features and return a single-row DataFrame.
+    IMPORTANT: final ordering MUST match FEATURES_24 (training order).
+    """
+    st.subheader("Patient Profile, Clinical Risk Factors & Prior History (24 Features)")
+
+    col1, col2, col3 = st.columns(3)
+
+    # --- Column 1 (core + lifestyle + meds)
+    with col1:
+        age = st.number_input("Age (years)", 20, 95, 55, 1, key="calc_age")
+        sex = st.selectbox("Sex", ["Female", "Male"], index=0, key="calc_sex")  # SEX: 0=f, 1=m
+        bmi = st.number_input("BMI (kg/m²)", 15.0, 60.0, 27.0, 0.1, key="calc_bmi")
+        cigs = st.number_input("Cigarettes per day", 0.0, 80.0, 10.0, 1.0, key="calc_cigs")
+        diabetes = st.selectbox("Diabetes", ["No", "Yes"], index=0, key="calc_diabetes")
+        bpmeds = st.selectbox("On BP medications", ["No", "Yes"], index=0, key="calc_bpmeds")
+
+        educ = st.selectbox(
+            "Education level",
+            [
+                "1 – Some High School",
+                "2 – High School/GED",
+                "3 – Some College/Vocational",
+                "4 – College Graduate+",
+            ],
+            index=3,
+            key="calc_educ"
         )
 
-    # 2) Size + LFS pointer checks (prevents confusing EOFError)
-    problems = []
-    for k, fn in ARTIFACTS.items():
-        p = base / fn
-        size = p.stat().st_size
+    # --- Column 2 (BP + metabolic/cardiac)
+    with col2:
+        sysbp = st.number_input("Systolic BP (mmHg)", 80.0, 260.0, 130.0, 1.0, key="calc_sysbp")
+        diabp = st.number_input("Diastolic BP (mmHg)", 40.0, 150.0, 80.0, 1.0, key="calc_diabp")
+        heartrate = st.number_input("Heart rate (bpm)", 40.0, 150.0, 72.0, 1.0, key="calc_hr")
+        glucose = st.number_input("Fasting Glucose (mg/dL)", 60.0, 400.0, 100.0, 1.0, key="calc_glucose")
+        hyperten = st.selectbox("Hypertension diagnosed (HYPERTEN)", ["No", "Yes"], index=0, key="calc_hyperten")
+        prevhyp = st.selectbox("Prior hypertension history (PREVHYP)", ["No", "Yes"], index=0, key="calc_prevhyp")
 
-        if size < 1024:  # <1KB is almost never a real model/scaler
-            problems.append(f"- {fn} is too small ({size} bytes). Likely incomplete upload.")
-        if _is_lfs_pointer(p):
-            problems.append(f"- {fn} looks like a Git LFS pointer (not the real binary).")
+    # --- Column 3 (lipids + symptoms + history)
+    with col3:
+        totchol = st.number_input("Total Cholesterol (mg/dL)", 100.0, 500.0, 210.0, 1.0, key="calc_totchol")
+        hdlc = st.number_input("HDL Cholesterol (mg/dL)", 10.0, 150.0, 45.0, 1.0, key="calc_hdlc")
+        ldlc = st.number_input("LDL Cholesterol (mg/dL)", 30.0, 300.0, 120.0, 1.0, key="calc_ldlc")
 
-    if problems:
-        raise RuntimeError(
-            "Artifact integrity check failed:\n"
-            + "\n".join(problems)
-            + "\n\nFix:\n"
-            "1) Ensure the real .pkl/.json files (not LFS pointers) are committed/deployed.\n"
-            "2) Re-upload/regenerate artifacts and redeploy.\n"
-        )
+        angina = st.selectbox("Angina / chest pain (ANGINA)", ["No", "Yes"], index=0, key="calc_angina")
+        prevap = st.selectbox("Prior angina (PREVAP)", ["No", "Yes"], index=0, key="calc_prevap")
 
-    # 3) Load feature list first (human-readable error if wrong)
-    fl_path = base / ARTIFACTS["feature_list"]
-    with open(fl_path, "r") as f:
-        features = json.load(f)["features"]
+        prevchd = st.selectbox("Prior CHD (PREVCHD)", ["No", "Yes"], index=0, key="calc_prevchd")
+        prevmi = st.selectbox("Prior MI (PREVMI)", ["No", "Yes"], index=0, key="calc_prevmi")
+        hospmi = st.selectbox("Hospitalized MI (HOSPMI)", ["No", "Yes"], index=0, key="calc_hospmi")
 
-    # 4) Load binaries with clear per-file error reporting
-    def _safe_joblib_load(name: str, filename: str):
-        p = base / filename
-        try:
-            return joblib.load(p)
-        except EOFError as e:
-            raise RuntimeError(
-                f"Failed to load {name}: {_describe_file(p)} -> EOFError.\n\n"
-                f"This usually means the file is truncated/corrupted or an LFS pointer was deployed.\n"
-                f"Recreate and re-upload '{filename}' and redeploy."
-            ) from e
-        except Exception as e:
-            raise RuntimeError(
-                f"Failed to load {name}: {_describe_file(p)}.\n\n"
-                f"Error: {type(e).__name__}: {e}\n"
-                f"Tip: ensure sklearn/xgboost versions match the training environment."
-            ) from e
+        stroke = st.selectbox("Prior Stroke (STROKE)", ["No", "Yes"], index=0, key="calc_stroke")
+        prevstrk = st.selectbox("Prior stroke history (PREVSTRK)", ["No", "Yes"], index=0, key="calc_prevstrk")
 
-    scaler = _safe_joblib_load("scaler", ARTIFACTS["scaler"])
-    rf     = _safe_joblib_load("RandomForest model", ARTIFACTS["rf"])
-    xgb    = _safe_joblib_load("XGBoost model", ARTIFACTS["xgb"])
-    meta   = _safe_joblib_load("meta-learner", ARTIFACTS["meta"])
+        mi_fchd = st.selectbox("MI_FCHD", ["No", "Yes"], index=0, key="calc_mi_fchd")
 
-    return features, scaler, rf, xgb, meta
+    # Map to numeric row
+    row = {
+        "SEX": 1 if sex == "Male" else 0,
+        "TOTCHOL": float(totchol),
+        "AGE": float(age),
+        "SYSBP": float(sysbp),
+        "DIABP": float(diabp),
+        "CIGPDAY": float(cigs),
+        "BMI": float(bmi),
+        "DIABETES": _as_int_yesno(diabetes),
+        "BPMEDS": _as_int_yesno(bpmeds),
+        "HEARTRTE": float(heartrate),
+        "GLUCOSE": float(glucose),
+        "educ": int(educ.split("–")[0].strip()),
 
+        "PREVCHD": _as_int_yesno(prevchd),
+        "PREVAP": _as_int_yesno(prevap),
+        "PREVMI": _as_int_yesno(prevmi),
+        "PREVSTRK": _as_int_yesno(prevstrk),
+        "PREVHYP": _as_int_yesno(prevhyp),
+        "HOSPMI": _as_int_yesno(hospmi),
 
-FEATURE_META = {
-    "SEX":       {"label": "Sex", "type": "cat01", "help": "0 = Female, 1 = Male"},
-    "DIABETES":  {"label": "Diabetes", "type": "cat01"},
-    "BPMEDS":    {"label": "BP meds", "type": "cat01"},
-    "HYPERTEN":  {"label": "Hypertension (flag)", "type": "cat01"},
-    "ANGINA":    {"label": "Angina history", "type": "cat01"},
-    "MI_FCHD":   {"label": "MI / FHCHD history", "type": "cat01"},
-    "STROKE":    {"label": "Stroke history", "type": "cat01"},
-    "PREVCHD":   {"label": "Prevalent CHD", "type": "cat01"},
-    "PREVAP":    {"label": "Prevalent angina pectoris", "type": "cat01"},
-    "PREVMI":    {"label": "Previous MI", "type": "cat01"},
-    "PREVSTRK":  {"label": "Previous stroke", "type": "cat01"},
-    "PREVHYP":   {"label": "Previous hypertension", "type": "cat01"},
-    "HOSPMI":    {"label": "Hospitalized MI", "type": "cat01"},
-    "educ":      {"label": "Education (educ)", "type": "int", "min": 0, "max": 4, "default": 1},
-    "AGE":       {"label": "Age (years)", "type": "float", "min": 18, "max": 95, "default": 55},
-    "SYSBP":     {"label": "Systolic BP (mmHg)", "type": "float", "min": 70, "max": 240, "default": 130},
-    "DIABP":     {"label": "Diastolic BP (mmHg)", "type": "float", "min": 40, "max": 140, "default": 80},
-    "TOTCHOL":   {"label": "Total Cholesterol (mg/dL)", "type": "float", "min": 80, "max": 500, "default": 190},
-    "HDLC":      {"label": "HDL (mg/dL)", "type": "float", "min": 10, "max": 150, "default": 45},
-    "LDLC":      {"label": "LDL (mg/dL)", "type": "float", "min": 10, "max": 300, "default": 120},
-    "GLUCOSE":   {"label": "Glucose (mg/dL)", "type": "float", "min": 40, "max": 400, "default": 100},
-    "BMI":       {"label": "BMI", "type": "float", "min": 12, "max": 60, "default": 27},
-    "HEARTRTE":  {"label": "Heart Rate (bpm)", "type": "float", "min": 30, "max": 200, "default": 72},
-    "CIGPDAY":   {"label": "Cigarettes per day", "type": "float", "min": 0, "max": 80, "default": 0},
-}
+        "HDLC": float(hdlc),
+        "LDLC": float(ldlc),
+        "ANGINA": _as_int_yesno(angina),
+        "MI_FCHD": _as_int_yesno(mi_fchd),
+        "STROKE": _as_int_yesno(stroke),
+        "HYPERTEN": _as_int_yesno(hyperten),
+    }
 
-def risk_bucket(p: float) -> str:
-    if p < 0.05:
-        return "Low"
-    if p < 0.075:
-        return "Borderline"
-    if p < 0.20:
-        return "Intermediate"
-    return "High"
+    # Ensure training order
+    try:
+        row_ordered = {feat: row[feat] for feat in FEATURES_24}
+    except KeyError as e:
+        st.error(f"features_24.json expects feature missing from UI mapping: {e}")
+        st.stop()
 
-def build_default_inputs(features):
-    inputs = {}
-    for f in features:
-        meta = FEATURE_META.get(f, {"type": "float", "default": 0.0})
-        if meta.get("type") == "cat01":
-            inputs[f] = 0
-        elif meta.get("type") == "int":
-            inputs[f] = int(meta.get("default", 0))
-        else:
-            inputs[f] = float(meta.get("default", 0.0))
-    return inputs
+    return pd.DataFrame([row_ordered])
 
-def make_row(inputs: dict, features: list[str]) -> pd.DataFrame:
-    row = {f: inputs.get(f, 0) for f in features}
-    return pd.DataFrame([row], columns=features)
+def stacking_predict_proba_24(df_input: pd.DataFrame, threshold: float):
+    """
+    Correct stacking (same pattern as v4):
+    - scale 24 features
+    - p_rf, p_xgb from base models
+    - meta LR uses ONLY [p_rf, p_xgb] (2 columns)
+    """
+    X = df_input.values.astype(float)
+    Xs = scaler.transform(X)
 
-def predict_proba(inputs: dict, features, scaler, rf, xgb, meta) -> float:
-    X = make_row(inputs, features)
-    Xs = scaler.transform(X.values)
-    p_rf = rf.predict_proba(Xs)[:, 1]
-    p_xgb = xgb.predict_proba(Xs)[:, 1]
-    stack = np.vstack([p_rf, p_xgb]).T
-    p = meta.predict_proba(stack)[:, 1]
-    return float(p[0])
+    p_rf = rf_model.predict_proba(Xs)[:, 1]
+    p_xgb = xgb_model.predict_proba(Xs)[:, 1]
 
-def apply_history_toggle(inputs: dict, use_history: bool, features: list[str]) -> dict:
-    if use_history:
-        return inputs
-    out = dict(inputs)
-    for k in HISTORY_FLAGS:
-        if k in features:
-            out[k] = 0
-    return out
+    stack_in = np.column_stack([p_rf, p_xgb])
+    p_final = meta_model.predict_proba(stack_in)[:, 1]
 
-try:
-    FEATURES, scaler, rf, xgb, meta = load_artifacts()
-except Exception as e:
-    st.error("Model artifacts failed to load.")
-    st.exception(e)
-    st.stop()
+    final_prob = float(p_final[0])
+    final_label = int(final_prob >= threshold)
 
-if "v5_inputs" not in st.session_state:
-    st.session_state.v5_inputs = build_default_inputs(FEATURES)
+    component_probs = {
+        "RF (Clinical)": float(p_rf[0]),
+        "XGB (Clinical)": float(p_xgb[0]),
+    }
+    return final_prob, final_label, component_probs
 
-if "v5_bie" not in st.session_state:
-    st.session_state.v5_bie = build_default_inputs(FEATURES)
-
-_header()
-
-st.sidebar.title("🧭 Navigation")
-page = st.sidebar.radio(
-    "Go to",
-    ["🧮 Risk Calculator", "🧠 Behavioral Impact Engine (BIE)", "🧬 Model & Data", "❓ FAQ & Notes"],
-    key="nav_v5",
-)
-st.sidebar.markdown("---")
-use_history = st.sidebar.checkbox("Include clinical history variables", value=True, key="hist_toggle_v5")
-
-if use_history:
-    st.warning(
-        "History variables (e.g., prior MI/stroke/angina) can dominate predictions. "
-        "For EHR deployment, ensure all history features are defined strictly prior to the prediction index date."
-    )
-
-def render_inputs(state_key: str, prefix: str, show_history: bool):
-    inputs = st.session_state[state_key]
-    cols = st.columns(3)
-
-    for i, f in enumerate(FEATURES):
-        if (not show_history) and (f in HISTORY_FLAGS):
-            continue
-
-        meta_f = FEATURE_META.get(f, {"label": f, "type": "float"})
-        label = meta_f.get("label", f)
-        ftype = meta_f.get("type", "float")
-        help_txt = meta_f.get("help", "0 = No, 1 = Yes" if ftype == "cat01" else "")
-
-        with cols[i % 3]:
-            widget_key = f"{prefix}__{f}"
-            if ftype == "cat01":
-                cur = int(inputs.get(f, 0))
-                cur = 1 if cur == 1 else 0
-                inputs[f] = st.selectbox(label, [0, 1], index=cur, key=widget_key, help=help_txt)
-            elif ftype == "int":
-                inputs[f] = st.number_input(
-                    label,
-                    min_value=int(meta_f.get("min", 0)),
-                    max_value=int(meta_f.get("max", 999)),
-                    value=int(inputs.get(f, meta_f.get("default", 0))),
-                    step=1,
-                    key=widget_key,
-                )
-            else:
-                inputs[f] = st.number_input(
-                    label,
-                    min_value=float(meta_f.get("min", -1e9)),
-                    max_value=float(meta_f.get("max", 1e9)),
-                    value=float(inputs.get(f, meta_f.get("default", inputs.get(f, 0.0)))),
-                    step=1.0,
-                    key=widget_key,
-                )
-
-    st.session_state[state_key] = inputs
-
-if page == "🧮 Risk Calculator":
-    st.subheader("🧮 Risk Calculator")
-    st.caption("Enter patient factors. The model returns an estimated probability of a CVD event within 10 years.")
-
-    with st.expander("Patient Inputs", expanded=True):
-        render_inputs("v5_inputs", prefix="calc", show_history=use_history)
-
-    inputs = apply_history_toggle(st.session_state.v5_inputs, use_history, FEATURES)
-    proba = predict_proba(inputs, FEATURES, scaler, rf, xgb, meta)
-
-    c1, c2, c3 = st.columns([1.2, 1.0, 1.0])
-    with c1:
-        st.metric("Estimated 10‑Year CVD Risk", f"{proba*100:.1f}%")
-    with c2:
-        st.metric("Risk Category", risk_bucket(proba))
-    with c3:
-        st.metric("Model", f"Stacking (RF + XGB) • {APP_VERSION}")
-
-    st.markdown("---")
-    st.caption("Tip: For prevention-style interpretation, turn OFF clinical history in the sidebar toggle.")
-
-elif page == "🧠 Behavioral Impact Engine (BIE)":
-    st.subheader("🧠 Behavioral Impact Engine (BIE)")
-    st.caption(
-        "The BIE runs counterfactual scenarios and estimates how risk may change if a single factor is modified. "
-        "This is educational decision support—not a prescription."
-    )
-
-    with st.expander("BIE Patient Inputs", expanded=True):
-        render_inputs("v5_bie", prefix="bie", show_history=use_history)
-
-    base_inputs = apply_history_toggle(st.session_state.v5_bie, use_history, FEATURES)
-    p0 = predict_proba(base_inputs, FEATURES, scaler, rf, xgb, meta)
-
-    st.write(f"**Baseline Risk:** {p0*100:.1f}%  —  **{risk_bucket(p0)}**")
+def bie_scenarios_24(df_patient: pd.DataFrame, threshold: float):
+    """
+    BIE for v5 clinical+history model:
+    - baseline
+    - no smoking
+    - lower SBP by 10
+    - BMI -2
+    - TOTCHOL -20
+    - GLUCOSE -10
+    """
+    base_prob, _, _ = stacking_predict_proba_24(df_patient, threshold=threshold)
 
     scenarios = []
+    scenarios.append(("Baseline", "Current profile", df_patient.copy()))
 
-    if "CIGPDAY" in FEATURES:
-        s = dict(base_inputs)
-        s["CIGPDAY"] = 0
-        scenarios.append(("No smoking (CIGPDAY = 0)", predict_proba(s, FEATURES, scaler, rf, xgb, meta)))
+    if float(df_patient["CIGPDAY"].iloc[0]) > 0:
+        d = df_patient.copy()
+        d["CIGPDAY"] = 0.0
+        scenarios.append(("No smoking", "Set cigarettes/day → 0", d))
 
-    if "SYSBP" in FEATURES:
-        s = dict(base_inputs)
-        s["SYSBP"] = max(70.0, float(s.get("SYSBP", 0.0)) - 10.0)
-        scenarios.append(("Lower SBP by 10 mmHg", predict_proba(s, FEATURES, scaler, rf, xgb, meta)))
+    sysbp = float(df_patient["SYSBP"].iloc[0])
+    d = df_patient.copy()
+    d["SYSBP"] = max(sysbp - 10.0, 90.0)
+    scenarios.append(("Lower SBP by 10 mmHg", f"SYSBP: {sysbp:.0f} → {d['SYSBP'].iloc[0]:.0f}", d))
 
-    if "LDLC" in FEATURES:
-        s = dict(base_inputs)
-        s["LDLC"] = max(10.0, float(s.get("LDLC", 0.0)) - 30.0)
-        scenarios.append(("Lower LDL by 30 mg/dL", predict_proba(s, FEATURES, scaler, rf, xgb, meta)))
+    bmi = float(df_patient["BMI"].iloc[0])
+    d = df_patient.copy()
+    d["BMI"] = max(bmi - 2.0, 15.0)
+    scenarios.append(("Reduce BMI by 2 kg/m²", f"BMI: {bmi:.1f} → {d['BMI'].iloc[0]:.1f}", d))
 
-    if "TOTCHOL" in FEATURES:
-        s = dict(base_inputs)
-        s["TOTCHOL"] = max(80.0, float(s.get("TOTCHOL", 0.0)) - 20.0)
-        scenarios.append(("Lower Total Chol by 20 mg/dL", predict_proba(s, FEATURES, scaler, rf, xgb, meta)))
+    tc = float(df_patient["TOTCHOL"].iloc[0])
+    d = df_patient.copy()
+    d["TOTCHOL"] = max(tc - 20.0, 100.0)
+    scenarios.append(("Lower Total Chol by 20 mg/dL", f"TOTCHOL: {tc:.0f} → {d['TOTCHOL'].iloc[0]:.0f}", d))
 
-    if "BMI" in FEATURES:
-        s = dict(base_inputs)
-        s["BMI"] = max(12.0, float(s.get("BMI", 0.0)) - 2.0)
-        scenarios.append(("Reduce BMI by 2 points", predict_proba(s, FEATURES, scaler, rf, xgb, meta)))
-
-    if "GLUCOSE" in FEATURES:
-        s = dict(base_inputs)
-        s["GLUCOSE"] = max(40.0, float(s.get("GLUCOSE", 0.0)) - 15.0)
-        scenarios.append(("Lower Glucose by 15 mg/dL", predict_proba(s, FEATURES, scaler, rf, xgb, meta)))
+    gl = float(df_patient["GLUCOSE"].iloc[0])
+    d = df_patient.copy()
+    d["GLUCOSE"] = max(gl - 10.0, 60.0)
+    scenarios.append(("Lower Glucose by 10 mg/dL", f"GLUCOSE: {gl:.0f} → {d['GLUCOSE'].iloc[0]:.0f}", d))
 
     rows = []
-    for name, p1 in scenarios:
-        abs_drop = (p0 - p1) * 100.0
-        rel_drop = ((p0 - p1) / p0 * 100.0) if p0 > 1e-9 else 0.0
-        rows.append([name, p0 * 100.0, p1 * 100.0, abs_drop, rel_drop])
+    best = None
 
-    df = pd.DataFrame(rows, columns=[
-        "Scenario",
-        "Baseline Risk (%)",
-        "New Risk (%)",
-        "Δ Absolute (pp) ↓",
-        "Δ Relative (%) ↓",
-    ]).sort_values("Δ Absolute (pp) ↓", ascending=False)
+    for name, desc, dfx in scenarios:
+        p, _, _ = stacking_predict_proba_24(dfx, threshold=threshold)
+        abs_change = (p - base_prob) * 100.0
+        rel_change = (p - base_prob) / base_prob * 100.0 if base_prob > 0 else 0.0
 
-    st.dataframe(df, use_container_width=True)
+        rows.append({
+            "Scenario": name,
+            "Description": desc,
+            "Risk (%)": p * 100.0,
+            "Δ abs (pp)": abs_change,
+            "Δ rel (%)": rel_change,
+        })
 
-    if len(df) > 0:
-        top = df.iloc[0]
-        st.success(
-            f"Most impactful scenario (within this simple set): **{top['Scenario']}** "
-            f"→ **{top['Baseline Risk (%)']:.1f}%** to **{top['New Risk (%)']:.1f}%** "
-            f"(drop **{top['Δ Absolute (pp) ↓']:.1f} pp**, **{top['Δ Relative (%) ↓']:.0f}%** relative)."
-        )
+        if name != "Baseline":
+            drop = base_prob - p
+            if best is None or drop > best["drop"]:
+                best = {"name": name, "p": p, "drop": drop}
 
-    st.markdown("### Evidence‑based guidance (template)")
+    return base_prob, pd.DataFrame(rows), best
+
+# =========================
+# 4) SIDEBAR
+# =========================
+with st.sidebar:
     st.markdown(
         """
-- **Smoking cessation:** counseling + pharmacotherapy options per guideline and shared decision-making  
-- **Blood pressure control:** confirm measurements, home BP, medication optimization if indicated  
-- **Lipids:** evaluate ASCVD risk context, consider statin intensity as appropriate  
-- **Diabetes / glucose:** lifestyle + medication management per guidelines  
-- **Weight:** nutrition, activity, and structured weight-loss support where appropriate  
+        <h2 style='margin-bottom:0;'>🫀 CVD Stacking GenAI</h2>
+        <p style='margin-top:4px;font-size:13px;'>
+        <b>v5.0 – 24 Features (Clinical+History)</b><br>
+        Framingham-based • Expanded clinical history (PREV* / HOSPMI)
+        </p>
+        """,
+        unsafe_allow_html=True
+    )
 
-*Localize this section to your hospital’s clinical pathways.*
+    st.markdown("---")
+
+    threshold = st.slider(
+        "Alert threshold (probability of CVD)",
+        0.10, 0.90, DEFAULT_THRESHOLD, 0.05,
+        help="If predicted risk ≥ threshold, the model flags the patient as 'At Risk'.",
+        key="sidebar_threshold"
+    )
+
+    show_components = st.checkbox(
+        "Show component model probabilities (RF/XGB)",
+        value=True,
+        key="sidebar_show_components"
+    )
+
+    st.markdown("---")
+    st.markdown(
+        """
+        **Disclaimer**  
+        This tool is for **research & education** only and must not be used as
+        a standalone diagnostic system.
         """
     )
 
-elif page == "🧬 Model & Data":
-    st.subheader("🧬 Model & Data")
+# =========================
+# 5) HERO HEADER
+# =========================
+st.markdown(
+    """
+    <div style="background-color:#0f4c75;padding:18px;border-radius:8px;margin-bottom:16px;">
+      <h1 style="color:white;margin-bottom:4px;">CVD Risk Prediction – Clinical Risk Stratification Model (v5.0)</h1>
+      <p style="color:#e0f2f1;margin:0;font-size:14px;">
+        10-Year Cardiovascular Risk Estimation with Expanded Clinical History (PREV* / HOSPMI)
+      </p>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
+
+# =========================
+# 6) TABS (match v4/v3)
+# =========================
+tab_calc, tab_bie, tab_model, tab_faq = st.tabs(
+    ["🧮 Risk Calculator", "🧠 Behavioral Impact Engine (BIE)", "🧬 Model & Data", "❓ FAQ & Notes"]
+)
+
+# -------------------------
+# TAB 1 – RISK CALCULATOR
+# -------------------------
+with tab_calc:
     st.markdown(
-        f"""
-**Model (deployment):** Stacking ensemble  
-- Base learners: **Random Forest** + **XGBoost**  
-- Meta‑learner: **Logistic Regression**  
-- Output: **probability** of 10‑year CVD event (model‑based estimate)
+        "Use this tab to enter patient information and obtain a **10-year CVD risk estimate** (24-feature clinical+history model)."
+    )
 
-**Feature set:** 24 inputs (includes clinical history variables)  
-**Recommended use:** clinical decision support prototype with local validation + calibration
+    df_input = build_input_df_24()
 
-**Important note on history variables:**  
-Prior diagnoses/events (e.g., prior MI/stroke/angina/hospitalized MI) may strongly increase risk and can
-inflate apparent performance if not time-indexed properly. For EHR use, define an **index date** and ensure all history features occur **before** that date.
+    with st.expander("View encoded feature vector (for experts)", expanded=False):
+        st.dataframe(df_input.style.format(precision=2), use_container_width=True)
+
+    run_btn = st.button("Run CVD Risk Prediction", type="primary", key="btn_run_calc")
+
+    if run_btn:
+        with st.spinner("Running clinical stacking model..."):
+            final_prob, final_label, component_probs = stacking_predict_proba_24(df_input, threshold=threshold)
+
+        st.session_state["v5_last_input_df"] = df_input
+        st.session_state["v5_last_prob"] = final_prob
+        st.session_state["v5_last_label"] = final_label
+        st.session_state["v5_last_components"] = component_probs
+        st.session_state["v5_last_threshold"] = threshold
+
+        category, color = interpret_risk(final_prob)
+
+        st.markdown("### Prediction Result")
+        col_res1, col_res2 = st.columns([2, 1])
+
+        with col_res1:
+            st.metric("Estimated 10-year CVD risk", f"{final_prob*100:.1f} %")
+            st.markdown(f"**Risk category:** {color} **{category}**")
+            st.markdown(
+                f"**Model decision at threshold {threshold:.2f}:** "
+                f"{'⚠️ At Risk (1)' if final_label == 1 else '✅ Not Flagged (0)'}"
+            )
+
+        with col_res2:
+            st.markdown(
+                """
+                **Interpretation guide**  
+                - <5%: Low risk  
+                - 5–9%: Borderline  
+                - 10–19%: Intermediate  
+                - ≥20%: High risk  
+                """
+            )
+
+        if show_components:
+            st.markdown("### Component Model Contributions")
+            comp_df = pd.DataFrame(
+                {"Model": list(component_probs.keys()),
+                 "Predicted CVD risk (%)": [p * 100 for p in component_probs.values()]}
+            )
+            st.bar_chart(comp_df.set_index("Model"))
+
+        st.info("Next: open **Behavioral Impact Engine (BIE)** to see patient-specific what-if scenarios.")
+    else:
+        st.info("Fill in the patient information and click **Run CVD Risk Prediction**.")
+
+# -------------------------
+# TAB 2 – BIE
+# -------------------------
+with tab_bie:
+    st.subheader("Behavioral Impact Engine (BIE)")
+
+    st.markdown(
+        """
+        The **Behavioral Impact Engine (BIE)** evaluates which modifiable factor matters most for a specific patient
+        and provides **model-based counterfactual scenarios** (what-if changes → re-score → compare).
         """
     )
 
-    st.markdown("**Deployed feature order (must match training):**")
-    st.code(", ".join(FEATURES))
+    st.markdown("---")
 
-    st.markdown("**Artifacts expected in repo root:**")
-    st.code("\n".join([ARTIFACTS[k] for k in ARTIFACTS]))
+    if "v5_last_input_df" not in st.session_state:
+        st.warning("Please run a prediction in **Risk Calculator** first.")
+    else:
+        df_patient = st.session_state["v5_last_input_df"]
+        used_threshold = st.session_state.get("v5_last_threshold", threshold)
 
-else:
-    st.subheader("❓ FAQ & Notes")
+        run_bie = st.button("Run BIE Analysis", key="btn_run_bie")
+
+        if run_bie:
+            base_prob, scenario_df, best = bie_scenarios_24(df_patient, threshold=used_threshold)
+            category, color = interpret_risk(base_prob)
+
+            st.markdown("### Patient-Specific BIE Summary")
+            st.markdown(f"Baseline risk (same model): **{base_prob*100:.1f}%**  ({color} {category})")
+
+            st.markdown("### Scenario Table (what-if)")
+            st.dataframe(
+                scenario_df.style.format(
+                    {"Risk (%)": "{:.2f}", "Δ abs (pp)": "{:+.2f}", "Δ rel (%)": "{:+.1f}"}
+                ),
+                use_container_width=True
+            )
+
+            st.markdown("### Most impactful lever (for this profile)")
+            if best is None:
+                st.write("No scenario produced a measurable change (rare).")
+            else:
+                abs_pp = best["drop"] * 100.0
+                rel_pct = (best["drop"] / base_prob * 100.0) if base_prob > 0 else 0.0
+                st.write(
+                    f"**{best['name']}** → estimated risk becomes **{best['p']*100:.2f}%** "
+                    f"(**-{abs_pp:.2f} pp absolute**, **-{rel_pct:.1f}% relative**)."
+                )
+
+            st.markdown("### Evidence-based recommendations (starter set)")
+            st.markdown(
+                """
+                **Smoking**
+                - If the patient smokes, discuss smoking cessation options and supports.
+
+                **Blood Pressure**
+                - If SBP/DBP are elevated, discuss lifestyle and clinician-guided management.
+
+                **Lipids & Metabolic**
+                - Encourage guideline-aligned diet/exercise; evaluate lipid/glucose management clinically.
+                """
+            )
+
+            st.markdown(
+                """
+                ---
+                ⚠️ **Important:** BIE outputs are **model-based simulations**, not prescriptive treatment recommendations.
+                """
+            )
+        else:
+            st.info("Click **Run BIE Analysis** to generate the scenario table and recommendations.")
+
+# -------------------------
+# TAB 3 – MODEL & DATA
+# -------------------------
+with tab_model:
+    st.subheader("Model & Data Overview")
+
     st.markdown(
         """
-### What is 10‑year cardiovascular disease (CVD) risk estimation?
-A **10‑year CVD risk estimate** is a **probability** that a person will experience a cardiovascular event within the next **10 years**, based on their current profile.
-It is **not** a diagnosis and does not guarantee that an event will or will not occur.
+        ### Data Source
+        - Based on the **Framingham Heart Study** dataset.
+        - Target: 10-year cardiovascular disease (**CVD**) outcome.
 
-### How should I interpret the percentage?
-A predicted risk of **15%** means that among **100 people with similar characteristics**, about **15 may experience** a CVD event within 10 years (under similar conditions).
+        ### Feature Set (24 features – clinical+history)
+        Includes core risk factors + expanded prior-history fields:
+        - Demographics: AGE, SEX, educ
+        - BP: SYSBP, DIABP
+        - Lipids: TOTCHOL, HDLC, LDLC
+        - Metabolic: BMI, GLUCOSE, DIABETES
+        - Lifestyle/Treatment: CIGPDAY, BPMEDS
+        - Symptoms/History: ANGINA, MI_FCHD, STROKE, HYPERTEN
+        - Expanded history: PREVCHD, PREVAP, PREVMI, PREVSTRK, PREVHYP, HOSPMI
 
-### Why might some factors appear to have small impact?
-Two reasons are common:
-1) **Nonlinear interactions:** models can learn complex combinations where one factor matters only in certain contexts.  
-2) **History variables dominate:** if prior-event features are present (e.g., prior MI/stroke/angina), they often outweigh lifestyle factors in risk prediction.
-
-### Why can some factors behave “oddly” in a single profile?
-Machine learning models are not guaranteed to be monotonic unless explicitly constrained and trained on strictly pre-index features.
-If you want monotonic behavior for selected variables, consider:
-- monotonic constraints (XGBoost),
-- probability calibration,
-- time-indexed feature definitions for EHR integration.
-
-### Is this hospital/EHR ready?
-This app is a **prototype CDS**. Hospital readiness typically requires:
-- local retrospective validation and calibration,
-- subgroup performance checks,
-- documentation (model card),
-- monitoring plan,
-- and governance approvals before clinician-facing deployment.
+        ### Architecture
+        - Base learners: **RandomForest** + **XGBoost**
+        - Stacking meta-model: **LogisticRegression** trained on **two inputs**:
+          \\( z = [p_{RF}, p_{XGB}] \\)
+        - Output: probability of 10-year CVD risk (research/education).
         """
     )
 
-_footer()
+# -------------------------
+# TAB 4 – FAQ & NOTES
+# -------------------------
+with tab_faq:
+    st.subheader("FAQ & Notes")
+
+    st.markdown(
+        """
+        **Q1. Why did we see “LogisticRegression expects 2 features”?**  
+        Because the meta-model is trained on **two probabilities** from base models: **[p_rf, p_xgb]**.
+        The app must never pass the 24 raw features into the meta-model.
+
+        **Q2. Is this clinical decision support?**  
+        No. Research & education only. Not medical advice.
+
+        **Q3. What changed from v4 to v5?**  
+        v5 expands the clinical+history feature set to 24 inputs (adds PREV* history fields and HOSPMI).
+        """
+    )
+
+# =========================
+# 7) FOOTER
+# =========================
+st.markdown(
+    """
+    <hr style="margin-top:32px;margin-bottom:8px;">
+    <div style="text-align:center;font-size:12px;color:gray;">
+      Stacking Generative AI CVD Risk Model v5.0 • 24 features (clinical+history) • Research & Education Only<br>
+      This application does not provide medical advice, diagnosis, or treatment.<br>
+      © 2025 Howard Nguyen, PhD. For demonstration only — not for clinical decision-making.
+    </div>
+    """,
+    unsafe_allow_html=True
+)
