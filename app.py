@@ -488,6 +488,10 @@ with tab_calc:
         # Patient-friendly "Why" summary (SHAP text only)
         if IS_PATIENT_MODE:
             st.markdown("### Why the model rated your risk this way")
+            st.caption(
+                "The model weighs many factors together. Some may slightly lower the score, "
+                "but they cannot cancel out major risk factors."
+            )
             if not SHAP_AVAILABLE:
                 st.info("Explanation is simplified here. (Optional) Add `shap` + `matplotlib` to show detailed explanations.")
             else:
