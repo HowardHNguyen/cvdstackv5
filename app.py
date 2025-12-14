@@ -524,15 +524,24 @@ with tab_calc:
                         "BMI": "Body weight (BMI)",
                     }
 
-                    idx = np.argsort(np.abs(vals))[::-1][:6]
-                    inc, dec = [], []
-                    for i in idx:
-                        feat = FEATURES_24[int(i)]
-                        label_txt = FRIENDLY.get(feat, feat)
+                    # Sort positive and negative separately (patient-friendly)
+                    pos_idx = np.argsort(vals)[::-1]      # descending
+                    neg_idx = np.argsort(vals)            # ascending
+
+                    inc = []
+                    dec = []
+
+                    for i in pos_idx:
                         if vals[int(i)] > 0:
-                            inc.append(label_txt)
-                        else:
-                            dec.append(label_txt)
+                            inc.append(FRIENDLY.get(FEATURES_24[int(i)], FEATURES_24[int(i)]))
+                        if len(inc) == 3:
+                            break
+
+                    for i in neg_idx:
+                        if vals[int(i)] < 0:
+                            dec.append(FRIENDLY.get(FEATURES_24[int(i)], FEATURES_24[int(i)]))
+                        if len(dec) == 3:
+                            break
 
                     if inc:
                         st.markdown("**What increases your risk most:**")
