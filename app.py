@@ -744,7 +744,7 @@ with tab_model:
     st.subheader("Model & Data")
     st.markdown(
         """
-        **Model & Data Overview**  
+        **MODEL & DATA OVERVIEW**  
 
         This application implements a stacked machine-learning model to estimate 10-year cardiovascular disease (CVD) risk, using an expanded clinical and prior-history feature set.
 
@@ -801,7 +801,7 @@ with tab_model:
 
         ⚠️ Important: Some history variables may appear protective or harmful depending on whether they are marked Yes or No for a given individual. Interpretations are association-based, not causal.
         
-        **Model Architecture (Stacking Ensemble)**
+        **MODEL ARCHITECTURE (Stacking Ensemble)**
 
         **Base Learners**  
         - RandomForestClassifier (clinical patterns & interactions)
@@ -839,6 +839,10 @@ with tab_model:
         - Provides counterfactual “what-if” scenarios
         - Shows how small changes (e.g., smoking, BP, cholesterol) would alter risk
         - Uses the same trained model to ensure internal consistency`
+
+        **HANDLING OF MISSING VALUES (NaN Imputation)** 
+        
+        Missing values were handled using feature-appropriate imputation strategies. Continuous variables were imputed using training-set medians, while categorical variables were imputed using the most frequent category. All imputation parameters were learned exclusively from the training data to prevent information leakage. These transparent methods were chosen to balance clinical realism, reproducibility, and interpretability.
         """
     )
     st.markdown("**Artifacts loaded from repo root:** scaler_24.pkl, rf_clin24.pkl, xgb_clin24.pkl, stack_meta_clin24.pkl, features_24.json")
@@ -914,7 +918,7 @@ st.markdown(
     """
     <hr style="margin-top:32px;margin-bottom:8px;">
     <div style="text-align:center;font-size:12px;color:gray;">
-      Stacking Generative AI CVD Risk Model v5.0 • 24 features (clinical+history) • Research & Education Only<br>
+      Stacking Generative AI CVD Risk Model v5.0 • 24 features (clinical+history) • Research & Demonstration Only<br>
       This application does not provide medical advice, diagnosis, or treatment.<br>
       © 2025 Howard Nguyen, PhD. For demonstration only — not for clinical decision-making.
     </div>
