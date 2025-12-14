@@ -286,21 +286,58 @@ def _build_shap_explainers(_rf_model, _xgb_model):
 def _shap_local_bar(explainer, X_row_1xF, feature_names, title: str, max_display=12):
     """
     Render a simple local SHAP bar plot (Streamlit-friendly).
+    Handles SHAP outputs that may be:
+      - list of arrays (per class)
+      - 2D array: (1, F)
+      - 3D array: (1, F, 2) or (1, F, K)
+      - shap.Explanation
     X_row_1xF must be shape (1, F).
     """
     if not SHAP_AVAILABLE or explainer is None:
         st.info("SHAP is not available in this deployment. Add `shap` and `matplotlib` to requirements.txt.")
         return
 
+    # Compute shap values
     sv = explainer.shap_values(X_row_1xF)
 
-    # Normalize to class 1 (binary)
-    if isinstance(sv, list) and len(sv) == 2:
-        sv = sv[1]
+    # If shap returns list per class, use positive class (1) when possible
+    if isinstance(sv, list):
+        sv = sv[1] if len(sv) >= 2 else sv[0]
+
+    # shap.Explanation -> .values
+    if hasattr(sv, "values"):
+        sv = sv.values
+
+    sv = np.array(sv)
+
+    # Normalize to shape (1, F)
+    # Common cases:
+    #  - (1, F) ok
+    #  - (1, F, 2) -> take class 1 along last axis
+    #  - (1, F, K) -> take class 1 if K>=2, else collapse last axis
+    if sv.ndim == 3:
+        if sv.shape[-1] >= 2:
+            sv = sv[:, :, 1]
+        else:
+            sv = sv.sum(axis=-1)
+
+    if sv.ndim != 2 or sv.shape[0] != 1:
+        st.warning(f"Unexpected SHAP shape: {sv.shape}. Skipping SHAP plot.")
+        return
+
     vals = sv[0]  # shape (F,)
+    vals = np.ravel(vals)
+
+    # Defensive: feature list length mismatch
+    if len(feature_names) != len(vals):
+        st.warning(
+            f"Feature name count ({len(feature_names)}) != SHAP feature count ({len(vals)}). "
+            "Skipping SHAP plot."
+        )
+        return
 
     idx = np.argsort(np.abs(vals))[::-1][:max_display]
-    names = [feature_names[i] for i in idx]
+    names = [feature_names[int(i)] for i in idx]
     impacts = vals[idx]
 
     fig, ax = plt.subplots(figsize=(7, 4))
