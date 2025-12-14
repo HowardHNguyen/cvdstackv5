@@ -713,6 +713,43 @@ with tab_model:
         **Stacking architecture (v5.0):**
         - Base learners: RandomForestClassifier + XGBClassifier (trained on scaled 24-feature clinical+history input)
         - Meta learner: LogisticRegression trained on base probabilities: [p_RF, p_XGB]
+
+        **Base Learners**  
+        	RandomForestClassifier (clinical patterns & interactions)
+            XGBoostClassifier (nonlinear boosting dynamics)
+
+        **Each base model outputs:**  
+            p_RF (CVD=1∣x)
+            p_XGB (CVD=1∣x)
+
+        **Meta-Learner (Stacking)**  
+            Logistic Regression
+            Input:
+                z=[p_RF,p_XGB]
+
+            Output:
+                p_stack (CVD=1∣x)
+
+        The meta-model learns how to optimally combine the strengths of the base learners.
+
+        **Model Output**  
+            Primary output: Probability of a 10-year CVD event
+            Displayed as: Percentage (%) with risk category
+            Risk categories (educational guidance):
+                <5% → Lower risk
+                5–9% → Borderline risk
+                10–19% → Higher risk
+                ≥20% → High risk
+
+        **Interpretability Components**  
+        **SHAP (Local Explanations)** 
+            Explains why the RF and XGB models scored a given profile higher or lower
+            Feature contributions are local and patient-specific
+            SHAP values reflect model associations, not treatment effects
+        **Behavioral Impact Engine (BIE)**  
+            Provides counterfactual “what-if” scenarios
+            Shows how small changes (e.g., smoking, BP, cholesterol) would alter risk
+            Uses the same trained model to ensure internal consistency`
         """
     )
     st.markdown("**Artifacts loaded from repo root:** scaler_24.pkl, rf_clin24.pkl, xgb_clin24.pkl, stack_meta_clin24.pkl, features_24.json")
@@ -732,6 +769,52 @@ with tab_faq:
 
         **This is not medical advice.**  
         Always consult a licensed clinician for diagnosis and treatment decisions.
+
+        **Is this a clinical decision support tool?**  
+        No. This application is intended for research and educational purposes only. It must not be used as a standalone diagnostic or treatment decision system.
+
+        **What does “10-year CVD risk” mean?**  
+        A 10-year CVD risk represents the estimated probability that an individual will experience a cardiovascular event within the next 10 years, based on their current risk profile and patterns learned from the training data.
+        It is a population-based estimate, not a prediction of certainty for any single person.
+
+        **How should I interpret the percentage?**  
+        A predicted risk of 15% means that, among 100 people with similar profiles, approximately 15 may experience a CVD event within 10 years.
+        This does not guarantee that an event will or will not occur for an individual.
+
+        **What events are included under “CVD”?**  
+        Depending on the dataset definition, CVD may include:
+        - Myocardial infarction (heart attack)
+        - Stroke
+        - Coronary heart disease and related cardiovascular outcomes
+        The model predicts the same outcome label used during training.
+
+        **Why does the model sometimes show both “risk-increasing” and “risk-lowering” factors?**  
+        The model evaluates all features together.
+        Some factors may slightly lower the score relative to the highest-risk patients, but they cannot cancel out major risk drivers such as diabetes, severe hypertension, smoking, or prior cardiovascular disease.
+
+        **Why do some history variables appear protective?**  
+        If a severe event indicator is marked “No”, the model interprets that as lower risk relative to patients who have experienced that event.
+        This does not mean the factor is inherently protective — only that it is less risky than the alternative.
+
+        **How is this risk typically used in practice?**  
+        In clinical settings, 10-year CVD risk estimates are commonly used to:
+        - Support lifestyle counseling
+        - Guide blood pressure and lipid management discussions
+        - Enable shared decision-making between patients and clinicians
+        This app demonstrates how such estimates may be generated using machine-learning methods.
+
+        **Important Limitations**  
+        - The model reflects patterns learned from the training population
+        - Performance may vary across populations, healthcare settings, and data availability
+        - Predictions depend on feature accuracy, calibration, and population similarity
+        - Outputs must not replace professional medical judgment
+
+        **🧭 Versioning Note**  
+        - v3.0: Prevention-focused, minimal history, non-leakage setup
+        - v4.0: Added limited clinical history
+        - v5.0: Expanded prior CVD history + stacking ensemble (RF + XGB)
+
+        Future versions (e.g., v5.1) may explore synthetic data augmentation (GANs) for robustness and subgroup balance.
         """
     )
 
