@@ -710,9 +710,64 @@ with tab_model:
     st.subheader("Model & Data")
     st.markdown(
         """
-        **Stacking architecture (v5.0):**
-        - Base learners: RandomForestClassifier + XGBClassifier (trained on scaled 24-feature clinical+history input)
-        - Meta learner: LogisticRegression trained on base probabilities: [p_RF, p_XGB]
+        **Model & Data Overview**  
+
+        This application implements a stacked machine-learning model to estimate 10-year cardiovascular disease (CVD) risk, using an expanded clinical and prior-history feature set.
+
+        The model is designed for research and educational use, supporting both clinical interpretation and patient understanding of cardiovascular risk factors.
+
+        **Data Source**  
+        - Primary source: Framingham Heart Study–based dataset
+        - Target variable: 10-year cardiovascular disease (CVD) outcome
+        - Prediction task: Binary classification → probability of a CVD event within 10 years
+
+        The Framingham dataset is widely used in cardiovascular risk modeling and provides long-term follow-up with standardized clinical variables.
+
+        **Feature Set (24 features — Clinical + History)**  
+        This v5.0 model extends v4.0 by incorporating expanded prior cardiovascular history, while preserving core preventive risk factors.
+
+        **Demographics**  
+        - AGE – Age (years)
+        - SEX – Biological sex
+        - educ – Education level (proxy for socioeconomic factors)
+
+        **Blood Pressure**  
+        - SYSBP – Systolic blood pressure (mmHg)
+        - DIABP – Diastolic blood pressure (mmHg)
+        - HYPERTEN – Hypertension diagnosis
+        - PREVHYP – Prior hypertension history
+
+        **Lipids**  
+        - TOTCHOL – Total cholesterol
+        - HDLC – HDL cholesterol
+        - LDLC – LDL cholesterol
+
+        **Metabolic**  
+        - MI – Body mass index
+        - GLUCOSE – Fasting glucose
+        - DIABETES – Diabetes diagnosis
+
+        **Lifestyle**  
+        - CIGPDAY – Cigarettes per day
+
+        **Cardiac / Vital Signs**  
+        - HEARTRTE – Heart rate
+
+        **Treatment**  
+        - BPMEDS – Blood pressure medication use
+
+        **Symptoms & Prior Cardiovascular History**  
+        - ANGINA – Angina / chest pain
+        - MI_FCHD – Family history of myocardial infarction
+        - PREVCHD – Prior coronary heart disease
+        - PREVMI – Prior myocardial infarction
+        - HOSPMI – Hospitalized myocardial infarction
+        - STROKE – Stroke indicator
+        - PREVSTRK – Prior stroke history
+
+        ⚠️ Important: Some history variables may appear protective or harmful depending on whether they are marked Yes or No for a given individual. Interpretations are association-based, not causal.
+        
+        **Model Architecture (Stacking Ensemble)**
 
         **Base Learners**  
         - RandomForestClassifier (clinical patterns & interactions)
