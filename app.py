@@ -715,41 +715,41 @@ with tab_model:
         - Meta learner: LogisticRegression trained on base probabilities: [p_RF, p_XGB]
 
         **Base Learners**  
-        	RandomForestClassifier (clinical patterns & interactions)
-            XGBoostClassifier (nonlinear boosting dynamics)
+        - RandomForestClassifier (clinical patterns & interactions)
+        - XGBoostClassifier (nonlinear boosting dynamics)
 
         **Each base model outputs:**  
-            p_RF (CVD=1∣x)
-            p_XGB (CVD=1∣x)
+        - p_RF (CVD=1∣x)
+        - p_XGB (CVD=1∣x)
 
         **Meta-Learner (Stacking)**  
-            Logistic Regression
-            Input:
+        - Logistic Regression
+        - Input:
                 z=[p_RF,p_XGB]
-
-            Output:
+        - Output:
                 p_stack (CVD=1∣x)
 
         The meta-model learns how to optimally combine the strengths of the base learners.
 
         **Model Output**  
-            Primary output: Probability of a 10-year CVD event
-            Displayed as: Percentage (%) with risk category
-            Risk categories (educational guidance):
-                <5% → Lower risk
-                5–9% → Borderline risk
-                10–19% → Higher risk
-                ≥20% → High risk
+        - Primary output: Probability of a 10-year CVD event
+        - Displayed as: Percentage (%) with risk category
+        - Risk categories (educational guidance):
+          - <5% → Lower risk
+          - 5–9% → Borderline risk
+          - 10–19% → Higher risk
+          - ≥20% → High risk
 
         **Interpretability Components**  
         **SHAP (Local Explanations)** 
-            Explains why the RF and XGB models scored a given profile higher or lower
-            Feature contributions are local and patient-specific
-            SHAP values reflect model associations, not treatment effects
+        - Explains why the RF and XGB models scored a given profile higher or lower
+        - Feature contributions are local and patient-specific
+        - SHAP values reflect model associations, not treatment effects
+
         **Behavioral Impact Engine (BIE)**  
-            Provides counterfactual “what-if” scenarios
-            Shows how small changes (e.g., smoking, BP, cholesterol) would alter risk
-            Uses the same trained model to ensure internal consistency`
+        - Provides counterfactual “what-if” scenarios
+        - Shows how small changes (e.g., smoking, BP, cholesterol) would alter risk
+        - Uses the same trained model to ensure internal consistency`
         """
     )
     st.markdown("**Artifacts loaded from repo root:** scaler_24.pkl, rf_clin24.pkl, xgb_clin24.pkl, stack_meta_clin24.pkl, features_24.json")
