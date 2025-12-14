@@ -793,6 +793,7 @@ with tab_model:
         **Symptoms & Prior Cardiovascular History**  
         - ANGINA – Angina / chest pain
         - MI_FCHD – Family history of myocardial infarction
+        - PREVAP - Prevalent Angina Pectoris at exam
         - PREVCHD – Prior coronary heart disease
         - PREVMI – Prior myocardial infarction
         - HOSPMI – Hospitalized myocardial infarction
