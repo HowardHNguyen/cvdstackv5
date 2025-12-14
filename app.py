@@ -3,6 +3,40 @@ import pandas as pd
 import json
 import joblib
 import streamlit as st
+
+import streamlit as st
+
+st.markdown(
+    """
+    <style>
+    /* Hide top-right Streamlit menu (Share, Fork, etc.) */
+    [data-testid="stToolbar"] {
+        visibility: hidden;
+        height: 0%;
+        position: fixed;
+    }
+
+    /* Hide bottom-right "Hosted with Streamlit" badge */
+    footer {
+        visibility: hidden;
+        height: 0%;
+    }
+
+    /* Hide hamburger menu (⋮) */
+    #MainMenu {
+        visibility: hidden;
+    }
+
+    /* Optional: remove extra padding caused by toolbar */
+    header {
+        visibility: hidden;
+        height: 0%;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
 from pathlib import Path
 
 # Optional SHAP imports (app still runs if not installed)
