@@ -734,3 +734,18 @@ with tab_faq:
         Always consult a licensed clinician for diagnosis and treatment decisions.
         """
     )
+
+# =========================
+# 7) FOOTER
+# =========================
+st.markdown(
+    """
+    <hr style="margin-top:32px;margin-bottom:8px;">
+    <div style="text-align:center;font-size:12px;color:gray;">
+      Stacking Generative AI CVD Risk Model v5.0 • 24 features (clinical+history) • Research & Education Only<br>
+      This application does not provide medical advice, diagnosis, or treatment.<br>
+      © 2025 Howard Nguyen, PhD. For demonstration only — not for clinical decision-making.
+    </div>
+    """,
+    unsafe_allow_html=True
+)
