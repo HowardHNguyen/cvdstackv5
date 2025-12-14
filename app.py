@@ -256,13 +256,20 @@ def bie_scenarios_24(df_patient: pd.DataFrame, threshold: float, include_advance
 
     return base_prob, pd.DataFrame(rows), best
 
-@st.cache_resource
-def _build_shap_explainers(rf_model, xgb_model):
+def _get_shap_explainers():
+    """
+    Build SHAP explainers once per app session.
+    Avoids Streamlit cache hashing errors on unhashable model objects.
+    """
     if not SHAP_AVAILABLE:
         return None, None
-    rf_explainer = shap.TreeExplainer(rf_model)
-    xgb_explainer = shap.TreeExplainer(xgb_model)
-    return rf_explainer, xgb_explainer
+
+    if "rf_explainer" not in st.session_state or "xgb_explainer" not in st.session_state:
+        st.session_state["rf_explainer"] = shap.TreeExplainer(rf_model)
+        st.session_state["xgb_explainer"] = shap.TreeExplainer(xgb_model)
+
+    return st.session_state["rf_explainer"], st.session_state["xgb_explainer"]
+
 
 def _shap_local_bar(explainer, X_row_1xF, feature_names, title: str, max_display=12):
     """
@@ -484,7 +491,7 @@ with tab_calc:
             if not SHAP_AVAILABLE:
                 st.info("Explanation is simplified here. (Optional) Add `shap` + `matplotlib` to show detailed explanations.")
             else:
-                _, xgb_explainer = _build_shap_explainers(rf_model, xgb_model)
+                _, xgb_explainer = _get_shap_explainers()
 
                 X_raw = df_input.values.astype(float)
                 X_scaled = scaler.transform(X_raw)
@@ -557,7 +564,7 @@ with tab_calc:
                 if not SHAP_AVAILABLE:
                     st.info("SHAP is not available here. Add `shap` and `matplotlib` to requirements.txt, then redeploy.")
                 else:
-                    rf_explainer, xgb_explainer = _build_shap_explainers(rf_model, xgb_model)
+                    rf_explainer, xgb_explainer = _get_shap_explainers()
 
                     X_raw = df_input.values.astype(float)
                     X_scaled = scaler.transform(X_raw)
