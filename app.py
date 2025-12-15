@@ -636,15 +636,14 @@ with tab_bie:
     if IS_PATIENT_MODE:
         st.markdown(
             """
-            This **What-If Simulator** explores how your model-estimated risk *might* change if certain health factors improve.
+            Some "what-if" changes may appear counterintuitive. This occurs because the model reflects patterns in historical data, including treatment effects and clinical complexity. These results do not imply that lowering blood pressure or cholesterol is harmful.
             It is **not a guarantee** and **not medical advice**.
             """
         )
     else:
         st.markdown(
             """
-            The **Behavioral Impact Engine (BIE)** evaluates which modifiable factor matters most for a specific patient
-            and provides **model-based counterfactual scenarios** (what-if changes → re-score → compare).
+            The **Behavioral Impact Engine (BIE)** performs local counterfactual re-scoring on an observational model. In high-risk, treated populations, lowering measured BP or cholesterol may move the profile toward clusters associated with advanced disease or secondary prevention, resulting in higher predicted risk. These effects reflect learned associations, not causal treatment effects.
             """
         )
 
@@ -669,7 +668,7 @@ with tab_bie:
             st.markdown("### Patient-Specific Summary")
             st.markdown(f"Baseline risk (same model): **{base_prob*100:.1f}%**  ({color} {category})")
 
-            st.markdown("### Scenario Table (what-if)")
+            st.markdown("### Scenario Table (model-based what-if analysis)")
 
             if IS_PATIENT_MODE:
                 scenario_df = scenario_df.rename(columns={
