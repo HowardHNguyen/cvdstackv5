@@ -415,7 +415,7 @@ with st.sidebar:
     st.markdown(
         """
         **Disclaimer**  
-        This tool is for **research & education** only and must not be used as
+        This tool is for **research & demonstration** only and must not be used as
         a standalone diagnostic system.
         """
     )
