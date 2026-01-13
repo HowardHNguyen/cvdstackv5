@@ -747,7 +747,7 @@ with tab_model:
 
         This application implements a stacked machine-learning model to estimate 10-year cardiovascular disease (CVD) risk, using an expanded clinical and prior-history feature set.
 
-        The model is designed for research and educational use, supporting both clinical interpretation and patient understanding of cardiovascular risk factors.
+        The model is designed for research and demo use, supporting both clinical interpretation and patient understanding of cardiovascular risk factors.
 
         **Data Source**  
         - Primary source: Framingham Heart Study–based dataset
@@ -823,7 +823,7 @@ with tab_model:
         **Model Output**  
         - Primary output: Probability of a 10-year CVD event
         - Displayed as: Percentage (%) with risk category
-        - Risk categories (educational guidance):
+        - Risk categories:
           - <5% → Lower risk
           - 5–9% → Borderline risk
           - 10–19% → Higher risk
@@ -864,7 +864,7 @@ with tab_faq:
         Always consult a licensed clinician for diagnosis and treatment decisions.
 
         **Is this a clinical decision support tool?**  
-        No. This application is intended for research and educational purposes only. It must not be used as a standalone diagnostic or treatment decision system.
+        No. This application is intended for research and demo purposes only. It must not be used as a standalone diagnostic or treatment decision system.
 
         **What does “10-year CVD risk” mean?**  
         A 10-year CVD risk represents the estimated probability that an individual will experience a cardiovascular event within the next 10 years, based on their current risk profile and patterns learned from the training data.
